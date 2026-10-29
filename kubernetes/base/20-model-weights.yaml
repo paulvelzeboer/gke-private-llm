@@ -1,0 +1,48 @@
+# ---------------------------------------------------------------------------
+# Model weights mounted read-only from the private GCS bucket via the GCS FUSE
+# CSI driver (over Private Google Access — no internet). The vLLM KSA uses
+# Workload Identity to authenticate as the weights-reader GCP SA, so no keys.
+#
+# Replace <BUCKET_NAME> and <WEIGHTS_SA_EMAIL> at deploy time (scripts/deploy.sh
+# does this from Terraform outputs).
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vllm
+  namespace: llm
+  annotations:
+    iam.gke.io/gcp-service-account: <WEIGHTS_SA_EMAIL>
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: models-pv
+spec:
+  capacity:
+    storage: 500Gi
+  accessModes: [ReadOnlyMany]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  mountOptions:
+    - implicit-dirs
+    - only-dir=current        # expose the weights/current/ prefix as the root
+  csi:
+    driver: gcsfuse.csi.storage.gke.io
+    readOnly: true
+    volumeHandle: <BUCKET_NAME>
+    volumeAttributes:
+      gcsfuseLoggingSeverity: warning
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: models-pvc
+  namespace: llm
+spec:
+  accessModes: [ReadOnlyMany]
+  storageClassName: ""
+  resources:
+    requests:
+      storage: 500Gi
+  volumeName: models-pv

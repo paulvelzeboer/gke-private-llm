@@ -1,0 +1,101 @@
+# ---------------------------------------------------------------------------
+# In-cluster egress lockdown, enforced by Dataplane V2 (Cilium). The VPC
+# firewall stops traffic at the network edge; these policies stop it at the pod.
+# Default is deny-all egress in the llm namespace; the model server may reach
+# nothing outbound except cluster DNS, not even other namespaces.
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: llm
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: llm
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-gateway-to-vllm
+  namespace: llm
+spec:
+  podSelector:
+    matchLabels:
+      app: vllm
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: gateway
+      ports:
+        - { protocol: TCP, port: 8000 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: gateway
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-and-vllm-egress
+  namespace: gateway
+spec:
+  podSelector:
+    matchLabels:
+      app: litellm
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: llm
+      ports:
+        - { protocol: TCP, port: 8000 }
+---
+# Clients on the VPC reach the gateway on 4000 through the internal LB.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-vpc-to-gateway
+  namespace: gateway
+spec:
+  podSelector:
+    matchLabels:
+      app: litellm
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: 10.42.0.0/20
+      ports:
+        - { protocol: TCP, port: 4000 }

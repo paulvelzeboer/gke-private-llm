@@ -1,0 +1,97 @@
+# ---------------------------------------------------------------------------
+# LiteLLM proxy = the control & audit plane. The only thing clients talk to.
+# OpenAI-compatible API, per-client virtual keys, budgets/rate limits, and
+# full request+response logging to stdout -> Cloud Logging. Exposed only on a
+# GKE internal load balancer (private VPC IP), never public.
+# Replace <ARTIFACT_REGISTRY> at deploy time.
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: litellm-config
+  namespace: gateway
+data:
+  config.yaml: |
+    model_list:
+      - model_name: private-llm
+        litellm_params:
+          model: hosted_vllm/private-llm
+          api_base: http://vllm.llm.svc.cluster.local:8000/v1
+          api_key: "none"
+
+    litellm_settings:
+      drop_params: true
+      success_callback: ["logging"]
+      failure_callback: ["logging"]
+      turn_off_message_logging: false
+      callbacks: ["prometheus"]   # metrics at :4000/metrics for Managed Prometheus
+
+    general_settings:
+      master_key: os.environ/LITELLM_MASTER_KEY
+      database_url: os.environ/DATABASE_URL
+      enforce_user_param: true
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: litellm-secrets
+  namespace: gateway
+type: Opaque
+stringData:
+  LITELLM_MASTER_KEY: "sk-REPLACE-ME-MASTER"
+  DATABASE_URL: "postgresql://litellm:REPLACE@postgres.gateway.svc.cluster.local:5432/litellm"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: litellm
+  namespace: gateway
+  labels: { app: litellm }
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: litellm }
+  template:
+    metadata:
+      labels: { app: litellm }
+    spec:
+      containers:
+        - name: litellm
+          image: REGION-docker.pkg.dev/PROJECT/privllm-images/berriai/litellm:main-stable
+          args: ["--config", "/etc/litellm/config.yaml", "--port", "4000"]
+          ports:
+            - { containerPort: 4000, name: http }
+          envFrom:
+            - secretRef: { name: litellm-secrets }
+          volumeMounts:
+            - { name: config, mountPath: /etc/litellm }
+          readinessProbe:
+            httpGet: { path: /health/readiness, port: 4000 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests: { cpu: "500m", memory: 512Mi }
+            limits:   { cpu: "2",    memory: 1Gi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 1000
+            capabilities: { drop: ["ALL"] }
+      volumes:
+        - name: config
+          configMap: { name: litellm-config }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: litellm
+  namespace: gateway
+  labels: { app: litellm }
+  annotations:
+    # GKE internal passthrough LB: a private VPC IP only.
+    networking.gke.io/load-balancer-type: "Internal"
+spec:
+  type: LoadBalancer
+  selector: { app: litellm }
+  ports:
+    - { name: http, port: 4000, targetPort: 4000 }

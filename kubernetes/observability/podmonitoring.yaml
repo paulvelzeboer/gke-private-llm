@@ -1,0 +1,30 @@
+# Google Managed Service for Prometheus scrape targets. GMP managed collection
+# is enabled on the cluster (Terraform monitor_config); these PodMonitoring CRs
+# tell it to scrape vLLM (:8000/metrics) and LiteLLM (:4000/metrics). Metrics
+# land in the Azure-Monitor-equivalent GMP store and feed the Cloud Monitoring
+# dashboard (terraform/monitoring.tf).
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata:
+  name: vllm
+  namespace: llm
+spec:
+  selector:
+    matchLabels: { app: vllm }
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+---
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata:
+  name: litellm
+  namespace: gateway
+spec:
+  selector:
+    matchLabels: { app: litellm }
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
